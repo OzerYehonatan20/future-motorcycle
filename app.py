@@ -15,7 +15,119 @@ model = joblib.load("motorcycle_model_final.pkl")
 app = FastAPI(title="🏍️ Future Motorcycle Rating API (Universal URL Version)")
 
 # ==============================
-# Core prediction logic
+# Homepage (HTML UI)
+# ==============================
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <html>
+    <head>
+      <meta charset='utf-8'>
+      <title>🏍️ Future Motorcycle Rating</title>
+      <style>
+        body { 
+          font-family: Arial, sans-serif; 
+          text-align:center; 
+          padding:60px; 
+          background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+        }
+        .container {
+          background:white;
+          display:inline-block;
+          padding:40px 50px;
+          border-radius:14px;
+          box-shadow:0 6px 15px rgba(0,0,0,0.1);
+          transition: all 0.2s ease-in-out;
+        }
+        .container:hover {
+          box-shadow:0 8px 20px rgba(0,0,0,0.15);
+        }
+        h1 {
+          font-size:34px;
+          color:#222;
+          margin-bottom:10px;
+        }
+        h1 span {
+          font-size:40px;
+        }
+        p.subtitle {
+          font-size:16px;
+          color:#555;
+          margin-top:0;
+          margin-bottom:25px;
+        }
+        input {
+          width:420px;
+          padding:10px;
+          font-size:16px;
+          border-radius:8px;
+          border:1px solid #bbb;
+        }
+        button {
+          padding:10px 25px;
+          background:#007bff;
+          color:white;
+          border:none;
+          border-radius:8px;
+          cursor:pointer;
+          font-size:16px;
+          margin-top:10px;
+        }
+        button:hover { 
+          background:#0056b3; 
+        }
+        button[title]:hover::after {
+          content: attr(title);
+          position: absolute;
+          background: #333;
+          color: white;
+          padding: 5px 10px;
+          border-radius: 5px;
+          font-size: 12px;
+          top: 60px;
+          left: 50%;
+          transform: translateX(-50%);
+        }
+        #result {
+          margin-top:25px;
+          font-size:20px;
+          font-weight:bold;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1><span>🏍️</span> Future Motorcycle Rating</h1>
+        <p class="subtitle">
+          Paste here any <b>motorcycle listing URL</b> (Yad2 / Bikedeals / WinWin...) <br>
+          and I’ll tell you what it’s really worth 😉
+        </p>
+        <input id="url" type="text" placeholder="https://www.yad2.co.il/item/..." />
+        <br>
+        <button onclick="predict()" title="Click to predict rating">🔥 Rate This Ride</button>
+        <div id="result"></div>
+      </div>
+
+      <script>
+        async function predict() {
+          const url = document.getElementById('url').value;
+          document.getElementById('result').innerText = "⏳ Analyzing...";
+          const response = await fetch(`/predict_url?url=${encodeURIComponent(url)}`);
+          const data = await response.json();
+          if (data.error) {
+            document.getElementById('result').innerText = "⚠️ " + data.error;
+          } else {
+            document.getElementById('result').innerText =
+              `⭐ Predicted Rating: ${data.predicted_rating}/10`;
+          }
+        }
+      </script>
+    </body>
+    </html>
+    """
+
+# ==============================
+# Prediction logic
 # ==============================
 def predict_rating(year, engine_cc, hand, km, price):
     age = 2025 - year
@@ -31,7 +143,7 @@ def predict_rating(year, engine_cc, hand, km, price):
     return round(float(model.predict(data)[0]), 2)
 
 # ==============================
-# URL scraping prediction
+# URL scraping + prediction
 # ==============================
 def extract_data_from_url(url):
     res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -75,51 +187,10 @@ def extract_data_from_url(url):
     return year, engine_cc, hand, km, price
 
 
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <html>
-    <head>
-      <meta charset='utf-8'>
-      <title>🏍️ Future Motorcycle Rating</title>
-      <style>
-        body { font-family: Arial; text-align:center; padding:50px; background:#fafafa; }
-        input { width:400px; padding:10px; font-size:16px; border-radius:8px; border:1px solid #ccc; }
-        button { padding:10px 25px; background:#007bff; color:white; border:none; border-radius:8px; cursor:pointer; }
-        button:hover { background:#0056b3; }
-        h1 { color:#222; }
-        #result { margin-top:20px; font-size:20px; }
-      </style>
-    </head>
-    <body>
-      <h1>🏍️ Future Motorcycle Rating</h1>
-      <p>Paste a motorcycle ad URL (Yad2, Bikedeals, WinWin...)</p>
-      <input id="url" type="text" placeholder="https://..." />
-      <button onclick="predict()">Predict Rating</button>
-      <div id="result"></div>
-
-      <script>
-        async function predict() {
-          const url = document.getElementById('url').value;
-          document.getElementById('result').innerText = "⏳ Analyzing...";
-          const response = await fetch(`/predict/url?link=${encodeURIComponent(url)}`);
-          const data = await response.json();
-          if (data.error) {
-            document.getElementById('result').innerText = "⚠️ " + data.error;
-          } else {
-            document.getElementById('result').innerText =
-              `⭐ Predicted Rating: ${data.predicted_rating}/10`;
-          }
-        }
-      </script>
-    </body>
-    </html>
-    """
-
-@app.get("/predict/url")
-def predict_from_url(link: str = Query(..., description="Motorcycle ad URL")):
+@app.get("/predict_url")
+def predict_from_url(url: str = Query(..., description="Motorcycle ad URL")):
     try:
-        year, engine_cc, hand, km, price = extract_data_from_url(link)
+        year, engine_cc, hand, km, price = extract_data_from_url(url)
         if None in [year, engine_cc, hand, km, price]:
             return JSONResponse({"error": "❌ Could not extract all fields from the link."})
         rating = predict_rating(year, engine_cc, hand, km, price)
