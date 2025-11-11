@@ -7,21 +7,32 @@ import pandas as pd
 import requests, re
 from bs4 import BeautifulSoup
 
+# ==============================
+# Load model + dataset (with safety and logs)
+# ==============================
+print("🚀 Starting app load...")
 
-# ==============================
-# Load model + dataset
-# ==============================
-df = pd.read_csv("motorcycles_dataset_merged.csv")
-model = joblib.load("motorcycle_model_final.pkl")
+try:
+    df = pd.read_csv("motorcycles_dataset_merged.csv")
+    print(f"✅ CSV loaded successfully. Rows: {len(df)}")
+except Exception as e:
+    print("❌ Failed to load CSV:", e)
+    df = pd.DataFrame()
+
+try:
+    model = joblib.load("motorcycle_model_final.pkl")
+    print("✅ Model loaded successfully.")
+except Exception as e:
+    print("❌ Failed to load model:", e)
+    model = None
 
 app = FastAPI(title="🏍️ Ozer Motor - Future Motorcycle Rating")
 
-# static for background image
+# Static folder for background image
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
 # ==============================
-# Home page (with background)
+# Home Page (HTML + background)
 # ==============================
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -115,28 +126,27 @@ def home():
     </html>
     """
 
-
 # ==============================
-# Core prediction logic
+# Prediction Logic
 # ==============================
 def predict_rating(year, engine_cc, hand, km, price):
     age = 2025 - year
     km_per_year = km / max(1, age)
     price_per_cc = price / engine_cc
     price_per_year = price / max(1, age)
-    normalized_price = price / df["price"].max()
+    normalized_price = price / df["price"].max() if not df.empty else price / 100000
     log_km = np.log1p(km)
     log_price = np.log1p(price)
-
     data = np.array([[age, engine_cc, hand, km, price,
                       km_per_year, price_per_cc, price_per_year,
                       normalized_price, log_km, log_price]])
+    if model is None:
+        return 0
     rating = float(model.predict(data)[0])
     return round(rating, 2)
 
-
 # ==============================
-# URL scraping + extraction
+# URL Scraper
 # ==============================
 def extract_data_from_url(url):
     res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -145,28 +155,22 @@ def extract_data_from_url(url):
     text = re.sub(r'[\u200f\u200e]', '', text)
     text = re.sub(r'\s+', ' ', text)
 
-    # מחיר
     price_match = re.search(r'([\d,]+)\s*₪', text)
     price = int(price_match.group(1).replace(',', '')) if price_match else None
 
-    # שנה
     year_match = re.search(r'(20\d{2})', text)
     year = int(year_match.group(1)) if year_match else None
 
-    # קילומטרים
     km_match = re.search(r'(\d{1,3}(?:,\d{3})*)\s*ק', text)
     km = int(km_match.group(1).replace(',', '')) if km_match else None
 
-    # סמ"ק
     cc_match = re.search(r'נפח מנוע[:\s]*(\d{2,4})', text) or re.search(r'(\d{2,4})\s*סמ', text)
     engine_cc = int(cc_match.group(1)) if cc_match else None
 
-    # יד
     hand_match = re.search(r'יד\s*(\d)', text)
     hand = int(hand_match.group(1)) if hand_match else 2
 
     return year, engine_cc, hand, km, price
-
 
 # ==============================
 # API Endpoints
@@ -181,7 +185,6 @@ def predict_from_url(link: str = Query(..., description="Motorcycle ad URL")):
         return {"predicted_rating": rating}
     except Exception as e:
         return JSONResponse({"error": f"Error: {str(e)}"})
-
 
 @app.get("/predict/manual")
 def predict_manual(year: int, engine_cc: int, hand: int, km: int, price: int):
