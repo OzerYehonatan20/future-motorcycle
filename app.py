@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 import joblib
 import numpy as np
@@ -6,14 +6,13 @@ import pandas as pd
 import requests, re
 from bs4 import BeautifulSoup
 
-
 # ==============================
 # Load model and dataset
 # ==============================
 df = pd.read_csv("motorcycles_dataset_merged.csv")
-model = joblib.load("motorcycle_model_final.pkl")
+model = joblib.load("motorcycle_model_final_render.pkl")
 
-app = FastAPI(title="🏍️ Future Motorcycle Rating API (Universal URL Version)")
+app = FastAPI(title="🏍️ Future Motorcycle Rating API (Enhanced Hybrid Version)")
 
 
 # ==============================
@@ -34,33 +33,74 @@ def home():
             background:#f5f5f5; 
             color:#222; 
         }
-        h1 { font-size:2.4em; margin-bottom:10px; }
+        h1 { font-size:2.2em; margin-bottom:10px; }
         p { font-size:1.1em; color:#444; margin-bottom:20px; }
-        input { width:420px; padding:10px; font-size:16px; border-radius:8px; border:1px solid #ccc; }
+        input, select { width:220px; padding:8px; font-size:15px; border-radius:8px; border:1px solid #ccc; margin:5px; }
         button { padding:10px 25px; background:#007bff; color:white; border:none; border-radius:8px; cursor:pointer; }
         button:hover { background:#0056b3; }
         #result { margin-top:25px; font-size:20px; font-weight:bold; }
+        #manualForm { display:none; margin-top:30px; }
       </style>
     </head>
     <body>
       <h1>🏍️ Future Motorcycle Rating</h1>
-      <p>Put here a motorcycle 2D-hand listing (Yad2, WinWin, Bikedeals...) and I’ll rate it ⚡</p>
+      <p>Paste a used motorcycle ad URL (Yad2, WinWin, Bikedeals...) or fill manually 👇</p>
+
       <input id="url" type="text" placeholder="https://..." />
-      <button onclick="predict()">Predict Rating</button>
+      <button onclick="predictFromURL()">Predict from URL</button>
+
+      <div id="manualForm">
+        <h3>🔧 Manual or Missing Data Entry</h3>
+        <input id="year" type="number" placeholder="Year (e.g. 2018)"><br>
+        <input id="engine_cc" type="number" placeholder="Engine CC"><br>
+        <input id="hand" type="number" placeholder="Hand (1-5)"><br>
+        <input id="km" type="number" placeholder="Kilometers"><br>
+        <input id="price" type="number" placeholder="Price (₪)"><br>
+        <button onclick="predictManual()">Predict Manually</button>
+      </div>
+
       <div id="result"></div>
 
       <script>
-        async function predict() {
-          const url = document.getElementById('url').value;
-          document.getElementById('result').innerText = "⏳ Analyzing...";
-          const response = await fetch(`/predict/url?link=${encodeURIComponent(url)}`);
+        async function predictFromURL() {
+          const link = document.getElementById('url').value;
+          document.getElementById('result').innerText = "⏳ Scraping...";
+          const response = await fetch(`/predict/url?link=${encodeURIComponent(link)}`);
           const data = await response.json();
+
           if (data.error) {
             document.getElementById('result').innerText = "⚠️ " + data.error;
+            document.getElementById('manualForm').style.display = 'block';
+          } else if (data.partial) {
+            document.getElementById('result').innerText = "⚙️ Partial data found — please complete missing fields:";
+            document.getElementById('manualForm').style.display = 'block';
+            if (data.partial.year) document.getElementById('year').value = data.partial.year;
+            if (data.partial.engine_cc) document.getElementById('engine_cc').value = data.partial.engine_cc;
+            if (data.partial.hand) document.getElementById('hand').value = data.partial.hand;
+            if (data.partial.km) document.getElementById('km').value = data.partial.km;
+            if (data.partial.price) document.getElementById('price').value = data.partial.price;
           } else {
-            document.getElementById('result').innerText =
-              `⭐ Predicted Rating: ${data.predicted_rating}/10`;
+            document.getElementById('result').innerText = `⭐ Predicted Rating: ${data.predicted_rating}/10`;
+            document.getElementById('manualForm').style.display = 'none';
           }
+        }
+
+        async function predictManual() {
+          const payload = {
+            year: parseInt(document.getElementById('year').value),
+            engine_cc: parseInt(document.getElementById('engine_cc').value),
+            hand: parseInt(document.getElementById('hand').value),
+            km: parseInt(document.getElementById('km').value),
+            price: parseInt(document.getElementById('price').value)
+          };
+          document.getElementById('result').innerText = "⚙️ Predicting...";
+          const res = await fetch('/predict/manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          document.getElementById('result').innerText = `⭐ Predicted Rating: ${data.predicted_rating}/10`;
         }
       </script>
     </body>
@@ -79,67 +119,80 @@ def predict_rating(year, engine_cc, hand, km, price):
     normalized_price = price / df["price"].max()
     log_km = np.log1p(km)
     log_price = np.log1p(price)
-
     data = np.array([[age, engine_cc, hand, km, price, km_per_year,
                       price_per_cc, price_per_year, normalized_price, log_km, log_price]])
-    return round(float(model.predict(data)[0]), 2)
+    return round(float(np.clip(model.predict(data)[0], 0, 10)), 2)
 
 
 # ==============================
 # URL scraping + extraction
 # ==============================
 def extract_data_from_url(url):
-    res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-    soup = BeautifulSoup(res.text, "html.parser")
+    try:
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
 
-    text = soup.get_text(" ", strip=True)
-    text = re.sub(r'[\u200f\u200e]', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    text = text.replace("״", '"').replace("׳", "'").replace('.', ',')
+        text = soup.get_text(" ", strip=True)
+        text = re.sub(r'[\u200f\u200e]', '', text)
+        text = re.sub(r'\s+', ' ', text)
+        text = text.replace("״", '"').replace("׳", "'").replace('.', ',')
 
-    # --- PRICE ---
-    price_match = re.search(r'מחיר[:\s]*([\d,]+)\s*₪?', text) or re.search(r'([\d,]+)\s*₪', text)
-    price = int(price_match.group(1).replace(',', '')) if price_match else None
+        def extract(patterns):
+            for p in patterns:
+                m = re.search(p, text)
+                if m:
+                    return int(re.sub(r'\D', '', m.group(1)))
+            return None
 
-    # --- YEAR ---
-    year_match = re.search(r'שנה[:\s]*(20\d{2})', text) or re.search(r'(20\d{2})', text)
-    year = int(year_match.group(1)) if year_match else None
+        price = extract([r'מחיר[:\s]*([\d,]+)\s*₪?', r'([\d,]+)\s*₪'])
+        year = extract([r'שנה[:\s]*(20\d{2})'])
+        km = extract([r'(?:ק.?ילומ.?|מרחק|נסיעה)[:\s]*(\d{1,3}(?:,\d{3})*)', r'(\d{1,3}(?:,\d{3})*)\s*(?:ק.?\"?מ)'])
+        engine_cc = extract([r'נפח\s*מנוע[:\s]*(\d{2,4})', r'(\d{2,4})\s*סמ'])
+        hand_match = re.search(r'יד\s*(\d)', text)
+        hand = int(hand_match.group(1)) if hand_match else None
 
-    # --- KILOMETERS ---
-    km_match = re.search(r'(?:ק.?ילומ.?|מרחק|נסיעה)[:\s]*(\d{1,3}(?:,\d{3})*)', text) or re.search(r'(\d{1,3}(?:,\d{3})*)\s*(?:ק.?\"?מ)', text)
-    km = int(km_match.group(1).replace(',', '')) if km_match else None
+        partial_data = dict(year=year, engine_cc=engine_cc, hand=hand, km=km, price=price)
+        missing = [k for k, v in partial_data.items() if v is None]
+        if any(missing) and any(v is not None for v in partial_data.values()):
+            return {"partial": partial_data}
+        elif all(v is not None for v in partial_data.values()):
+            return {"complete": partial_data}
+        else:
+            return {"error": "No valid fields found."}
 
-    # --- ENGINE CC ---
-    cc_match = re.search(r'נפח\s*מנוע[:\s]*(\d{2,4})', text) or re.search(r'(\d{2,4})\s*סמ', text)
-    engine_cc = int(cc_match.group(1)) if cc_match else None
-
-    # --- HAND ---
-    hand_match = re.search(r'יד\s*(\d)', text)
-    hand = int(hand_match.group(1)) if hand_match else 2
-
-    if not price:
-        price_tag = soup.find(class_=re.compile("price|מחיר"))
-        if price_tag:
-            price = int(re.sub(r'\D', '', price_tag.text))
-
-    if year and not (2000 <= year <= 2025): year = None
-    if km and km < 100: km = None
-    if price and price < 2000: price = None
-
-    return year, engine_cc, hand, km, price
+    except Exception as e:
+        return {"error": f"Scraping failed: {e}"}
 
 
 # ==============================
-# Prediction endpoint
+# Prediction endpoints
 # ==============================
 @app.get("/predict/url")
 def predict_from_url(link: str = Query(..., description="Motorcycle ad URL")):
+    result = extract_data_from_url(link)
+    if "error" in result:
+        return JSONResponse({"error": result["error"]})
+    if "partial" in result:
+        return JSONResponse({"partial": result["partial"]})
+    if "complete" in result:
+        d = result["complete"]
+        rating = predict_rating(d["year"], d["engine_cc"], d["hand"], d["km"], d["price"])
+        return {"predicted_rating": rating}
+
+
+@app.post("/predict/manual")
+def predict_manual(data: dict):
     try:
-        #
-        year, engine_cc, hand, km, price = extract_data_from_url(link)
-        if None in [year, engine_cc, hand, km, price]:
-            return JSONResponse({"error": "❌ Could not extract all fields from the link."})
-        rating = predict_rating(year, engine_cc, hand, km, price)
+        rating = predict_rating(data["year"], data["engine_cc"], data["hand"], data["km"], data["price"])
         return {"predicted_rating": rating}
     except Exception as e:
-        return JSONResponse({"error": f"Error: {str(e)}"})
+        return JSONResponse({"error": str(e)})
+
+
+# ==============================
+# Local run
+# ==============================
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
