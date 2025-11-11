@@ -135,6 +135,7 @@ def extract_data_from_url(url):
 @app.get("/predict/url")
 def predict_from_url(link: str = Query(..., description="Motorcycle ad URL")):
     try:
+        #
         year, engine_cc, hand, km, price = extract_data_from_url(link)
         if None in [year, engine_cc, hand, km, price]:
             return JSONResponse({"error": "❌ Could not extract all fields from the link."})
